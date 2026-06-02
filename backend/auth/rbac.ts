@@ -1,10 +1,8 @@
-export type Role = 'admin' | 'operator' | 'viewer';
-
 export interface User {
   id: string;
-  role: Role;
+  role: 'admin' | 'operator' | 'viewer';
   organizationId?: string;
-  accessibleStores?: string[];
+  accessibleStoreIds?: string[];
 }
 
 export interface Permission {
@@ -12,7 +10,7 @@ export interface Permission {
   action: 'create' | 'read' | 'update' | 'delete' | 'bulk';
 }
 
-const ROLE_PERMISSIONS: Record<Role, Permission[]> = {
+const ROLE_PERMISSIONS: Record<string, Permission[]> = {
   admin: [
     { resource: '*', action: 'create' },
     { resource: '*', action: 'read' },
@@ -31,8 +29,8 @@ const ROLE_PERMISSIONS: Record<Role, Permission[]> = {
   ]
 };
 
-export function hasPermission(user: User, resource: string, action: Permission['action']): boolean {
-  const permissions = ROLE_PERMISSIONS[user.role];
+export function hasPermission(user: User, resource: string, action: string): boolean {
+  const permissions = ROLE_PERMISSIONS[user.role] || [];
   return permissions.some(p => 
     (p.resource === '*' || p.resource === resource) && p.action === action
   );
@@ -48,12 +46,12 @@ export function extractUserFromEvent(event: any): User {
     const token = authHeader.replace('Bearer ', '');
     const payload = JSON.parse(Buffer.from(token.split('.')[1], 'base64').toString());
     return {
-      id: payload.sub || payload.userId,
+      id: payload.sub || 'anonymous',
       role: payload.role || 'viewer',
       organizationId: payload.organizationId,
-      accessibleStores: payload.accessibleStores
+      accessibleStoreIds: payload.accessibleStoreIds
     };
-  } catch (error) {
-    throw new Error('Invalid token');
+  } catch {
+    return { id: 'anonymous', role: 'viewer' };
   }
 }
