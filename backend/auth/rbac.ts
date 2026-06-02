@@ -2,7 +2,7 @@ export interface User {
   id: string;
   role: 'admin' | 'operator' | 'viewer';
   organizationId?: string;
-  accessibleStores?: string[];
+  accessibleStoreRange?: string;
 }
 
 export interface Permission {
@@ -10,7 +10,7 @@ export interface Permission {
   action: 'create' | 'read' | 'update' | 'delete' | 'bulk';
 }
 
-const rolePermissions: Record<string, Permission[]> = {
+const ROLE_PERMISSIONS: Record<string, Permission[]> = {
   admin: [
     { resource: '*', action: 'create' },
     { resource: '*', action: 'read' },
@@ -30,7 +30,7 @@ const rolePermissions: Record<string, Permission[]> = {
 };
 
 export function hasPermission(user: User, resource: string, action: string): boolean {
-  const permissions = rolePermissions[user.role] || [];
+  const permissions = ROLE_PERMISSIONS[user.role] || [];
   return permissions.some(p => 
     (p.resource === '*' || p.resource === resource) && p.action === action
   );
@@ -39,17 +39,17 @@ export function hasPermission(user: User, resource: string, action: string): boo
 export function extractUserFromEvent(event: any): User {
   const authHeader = event.headers?.Authorization || event.headers?.authorization;
   if (!authHeader) {
-    throw new Error('No authorization header');
+    throw new Error('Authorization header missing');
   }
   
   try {
     const token = authHeader.replace('Bearer ', '');
-    const decoded = JSON.parse(Buffer.from(token.split('.')[1], 'base64').toString());
+    const payload = JSON.parse(Buffer.from(token.split('.')[1], 'base64').toString());
     return {
-      id: decoded.sub || 'unknown',
-      role: decoded.role || 'viewer',
-      organizationId: decoded.organizationId,
-      accessibleStores: decoded.accessibleStores
+      id: payload.sub || payload.userId,
+      role: payload.role || 'viewer',
+      organizationId: payload.organizationId,
+      accessibleStoreRange: payload.accessibleStoreRange
     };
   } catch (error) {
     throw new Error('Invalid token');
