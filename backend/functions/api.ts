@@ -7,27 +7,36 @@ const client = new DynamoDBClient({});
 const docClient = DynamoDBDocumentClient.from(client);
 const TABLE_NAME = process.env.MAIN_TABLE!;
 
-const TABLE_CONFIGS = {
-  '0': { name: 'stores', pk: 'storeId' },
-  '1': { name: 'keepBottleInventory', pk: 'keepBottleId' },
-  '2': { name: 'memberVisitHistory', pk: 'visitHistoryId' },
-  '3': { name: 'keepBottleConsumptionHistory', pk: 'consumptionHistoryId' },
-  '4': { name: 'demandForecastReport', pk: 'forecastReportId' },
-  '5': { name: 'monthlyAggregateData', pk: 'aggregateId' },
-  '6': { name: 'seasonalVariationAnalysis', pk: 'seasonalVariationAnalysisId' },
-  '7': { name: 'replenishmentPlan', pk: 'replenishmentPlanId' },
-  '8': { name: 'deliverySchedule', pk: 'deliveryScheduleId' },
-  '9': { name: 'deliveryRoute', pk: 'deliveryRouteId' },
-  '10': { name: 'systemUsers', pk: 'userId' }
-};
+interface APIGatewayEvent {
+  httpMethod: string;
+  path: string;
+  pathParameters?: { [key: string]: string };
+  queryStringParameters?: { [key: string]: string };
+  body?: string;
+  headers: { [key: string]: string };
+}
 
-interface APIResponse {
+interface APIGatewayResponse {
   statusCode: number;
-  headers: Record<string, string>;
+  headers: { [key: string]: string };
   body: string;
 }
 
-function createResponse(statusCode: number, body: any): APIResponse {
+const TABLE_CONFIGS = {
+  '0': { name: 'stores', pk: 'storeId', displayName: '店舗マスタ' },
+  '1': { name: 'keep_bottles', pk: 'keepBottleId', displayName: 'キープボトル在庫' },
+  '2': { name: 'visit_history', pk: 'visitHistoryId', displayName: '会員来店履歴' },
+  '3': { name: 'consumption_history', pk: 'consumptionHistoryId', displayName: 'キープボトル消費履歴' },
+  '4': { name: 'demand_forecast_reports', pk: 'forecastReportId', displayName: '需要予測レポート' },
+  '5': { name: 'monthly_aggregation', pk: 'aggregationId', displayName: '月次集計データ' },
+  '6': { name: 'seasonal_analysis', pk: 'seasonalAnalysisId', displayName: '季節変動分析データ' },
+  '7': { name: 'replenishment_plans', pk: 'replenishmentPlanId', displayName: '補充計画' },
+  '8': { name: 'delivery_schedules', pk: 'deliveryScheduleId', displayName: '納品スケジュール' },
+  '9': { name: 'delivery_routes', pk: 'deliveryRouteId', displayName: '配送ルート' },
+  '10': { name: 'system_users', pk: 'userId', displayName: 'システム利用者' }
+};
+
+function createResponse(statusCode: number, body: any): APIGatewayResponse {
   return {
     statusCode,
     headers: {
@@ -40,8 +49,8 @@ function createResponse(statusCode: number, body: any): APIResponse {
   };
 }
 
-function createAuditLog(user: User, action: string, resource: string, details?: any) {
-  return {
+async function createAuditLog(user: User, action: string, resource: string, details: any) {
+  const auditLog = {
     pk: 'AUDIT',
     sk: `${Date.now()}_${randomUUID()}`,
     userId: user.id,
@@ -51,23 +60,17 @@ function createAuditLog(user: User, action: string, resource: string, details?: 
     details,
     timestamp: new Date().toISOString()
   };
-}
-
-async function writeAuditLog(user: User, action: string, resource: string, details?: any) {
-  try {
-    await docClient.send(new PutCommand({
-      TableName: TABLE_NAME,
-      Item: createAuditLog(user, action, resource, details)
-    }));
-  } catch (error) {
-    console.error('Failed to write audit log:', error);
-  }
+  
+  await docClient.send(new PutCommand({
+    TableName: TABLE_NAME,
+    Item: auditLog
+  }));
 }
 
 function validateRequired(item: any, requiredFields: string[]): string[] {
   const errors: string[] = [];
   for (const field of requiredFields) {
-    if (item[field] === undefined || item[field] === null || item[field] === '') {
+    if (!item[field]) {
       errors.push(`${field} is required`);
     }
   }
@@ -75,23 +78,23 @@ function validateRequired(item: any, requiredFields: string[]): string[] {
 }
 
 function getRequiredFields(tableIndex: string): string[] {
-  const fieldMap: Record<string, string[]> = {
-    '0': ['storeCode', 'storeName', 'storeCategory', 'prefecture', 'city', 'transactionStartDate', 'transactionStatus', 'isActive'],
-    '1': ['storeId', 'customerName', 'productName', 'category', 'capacityMl', 'remainingMl', 'remainingPercentage', 'keepStartDate', 'status'],
-    '2': ['memberId', 'storeId', 'visitDateTime', 'keepBottleUsed', 'newBottleOrdered'],
-    '3': ['storeId', 'keepBottleId', 'memberId', 'consumptionDateTime', 'consumptionAmount', 'remainingAmount', 'isFinished'],
-    '4': ['storeId', 'productCategory', 'forecastPeriodStart', 'forecastPeriodEnd', 'forecastDemand', 'confidenceLevel', 'seasonalFactor', 'eventFactor', 'recommendedPurchaseAmount'],
-    '5': ['storeId', 'aggregateYearMonth', 'productCategory', 'newKeepBottles', 'completedBottles', 'totalConsumption', 'totalVisitors', 'activeMembers', 'averageConsumption'],
-    '6': ['analysisYear', 'analysisMonth', 'alcoholCategory', 'regionCode', 'baseConsumption', 'actualConsumption', 'seasonalIndex', 'eventInfluence'],
-    '7': ['storeId', 'productCode', 'productName', 'planPeriodStart', 'planPeriodEnd', 'currentStock', 'forecastDemand', 'safetyStock', 'plannedReplenishment', 'scheduledDate', 'planStatus', 'priority'],
-    '8': ['storeId', 'productCode', 'productName', 'scheduledDeliveryDate', 'scheduledQuantity', 'deliveryStatus'],
-    '9': ['routeName', 'driverId', 'vehicleId', 'startLocation', 'endLocation', 'estimatedDuration', 'totalDistance', 'maxCapacity', 'deliveryDays', 'startTime', 'isActive'],
-    '10': ['loginId', 'passwordHash', 'userName', 'email', 'permissionLevel', 'organization', 'accountStatus']
+  const fieldMap: { [key: string]: string[] } = {
+    '0': ['storeCode', 'storeName', 'storeCategory', 'prefecture', 'city', 'transactionStartDate', 'transactionStatus', 'validFlag', 'createdBy', 'updatedBy'],
+    '1': ['storeId', 'customerName', 'productName', 'category', 'capacityMl', 'remainingMl', 'remainingPercent', 'keepStartDate', 'status', 'createdBy'],
+    '2': ['memberId', 'storeId', 'visitDateTime', 'keepBottleUsedFlag', 'newBottleOrderFlag', 'createdBy'],
+    '3': ['storeId', 'keepBottleId', 'memberId', 'consumptionDateTime', 'consumptionAmount', 'remainingAmount', 'completedFlag', 'createdBy'],
+    '4': ['storeId', 'productCategory', 'forecastPeriodStart', 'forecastPeriodEnd', 'forecastDemand', 'confidenceLevel', 'seasonalFactorFlag', 'eventFactorFlag', 'recommendedPurchaseAmount', 'createdBy'],
+    '5': ['storeId', 'aggregationYearMonth', 'productCategory', 'newKeepBottles', 'completedBottles', 'totalConsumption', 'visitCount', 'activeMemberCount', 'averageConsumption', 'createdBy'],
+    '6': ['analysisYear', 'analysisMonth', 'alcoholCategory', 'regionCode', 'baseConsumption', 'actualConsumption', 'seasonalIndex', 'eventInfluenceFlag', 'createdBy'],
+    '7': ['storeId', 'productCode', 'productName', 'planPeriodStart', 'planPeriodEnd', 'currentStock', 'forecastDemand', 'safetyStock', 'plannedReplenishment', 'plannedDate', 'planStatus', 'priority', 'createdBy'],
+    '8': ['storeId', 'productCode', 'productName', 'scheduledDeliveryDate', 'scheduledQuantity', 'deliveryStatus', 'createdBy'],
+    '9': ['routeName', 'driverUserId', 'vehicleId', 'startLocation', 'endLocation', 'estimatedDuration', 'totalDistance', 'maxCapacity', 'deliveryDays', 'startTime', 'validFlag', 'createdBy'],
+    '10': ['loginId', 'passwordHash', 'userName', 'email', 'permissionLevel', 'organization', 'accountStatus', 'createdBy']
   };
   return fieldMap[tableIndex] || [];
 }
 
-export const handler = async (event: any): Promise<APIResponse> => {
+export const handler = async (event: APIGatewayEvent): Promise<APIGatewayResponse> => {
   try {
     if (event.httpMethod === 'OPTIONS') {
       return createResponse(200, {});
@@ -104,289 +107,245 @@ export const handler = async (event: any): Promise<APIResponse> => {
       return createResponse(401, { error: 'Unauthorized' });
     }
 
-    const path = event.path || event.rawPath || '';
-    const method = event.httpMethod || event.requestContext?.http?.method || 'GET';
-    const pathParts = path.split('/').filter(p => p);
-
-    if (pathParts[0] === 'resources') {
-      if (method === 'GET') {
-        if (!hasPermission(user, 'resources', 'read')) {
-          return createResponse(403, { error: 'Forbidden' });
-        }
-
-        const resources = Object.entries(TABLE_CONFIGS).map(([index, config]) => ({
-          index,
-          name: config.name,
-          primaryKey: config.pk
-        }));
-
-        return createResponse(200, { resources });
+    const path = event.path;
+    const method = event.httpMethod;
+    
+    if (path === '/resources' && method === 'GET') {
+      if (!hasPermission(user, 'resources', 'read')) {
+        return createResponse(403, { error: 'Forbidden' });
       }
+      
+      const resources = Object.entries(TABLE_CONFIGS).map(([index, config]) => ({
+        index,
+        name: config.name,
+        displayName: config.displayName,
+        primaryKey: config.pk
+      }));
+      
+      return createResponse(200, { resources });
     }
 
-    if (pathParts[0] === 'api' && pathParts[1] && TABLE_CONFIGS[pathParts[1]]) {
-      const tableIndex = pathParts[1];
-      const tableConfig = TABLE_CONFIGS[tableIndex];
-      const isBulkOperation = pathParts[2] === 'bulk';
-      const itemId = pathParts[2] && !isBulkOperation ? pathParts[2] : null;
+    const pathMatch = path.match(/^\/api\/(\d+)(?:\/(\w+))?(?:\/(\w+))?$/);
+    if (!pathMatch) {
+      return createResponse(404, { error: 'Not found' });
+    }
 
-      if (method === 'GET' && !itemId && !isBulkOperation) {
-        if (!hasPermission(user, tableConfig.name, 'read')) {
-          return createResponse(403, { error: 'Forbidden' });
-        }
+    const [, tableIndex, resourceId, action] = pathMatch;
+    const tableConfig = TABLE_CONFIGS[tableIndex as keyof typeof TABLE_CONFIGS];
+    
+    if (!tableConfig) {
+      return createResponse(404, { error: 'Table not found' });
+    }
 
-        try {
-          const result = await docClient.send(new ScanCommand({
-            TableName: TABLE_NAME,
-            FilterExpression: 'begins_with(pk, :pkPrefix)',
-            ExpressionAttributeValues: {
-              ':pkPrefix': `${tableConfig.name}#`
-            }
-          }));
+    const pk = `${tableConfig.name}#${tableIndex}`;
 
-          return createResponse(200, { items: result.Items || [] });
-        } catch (error) {
-          console.error('Scan error:', error);
-          return createResponse(500, { error: 'Internal server error' });
-        }
+    if (action === 'bulk' && method === 'POST') {
+      if (!hasPermission(user, tableConfig.name, 'bulk')) {
+        return createResponse(403, { error: 'Forbidden' });
       }
 
-      if (method === 'GET' && itemId) {
-        if (!hasPermission(user, tableConfig.name, 'read')) {
-          return createResponse(403, { error: 'Forbidden' });
-        }
+      const body = JSON.parse(event.body || '{}');
+      const items = body.items || [];
+      
+      if (!Array.isArray(items)) {
+        return createResponse(400, { error: 'Items must be an array' });
+      }
 
-        try {
-          const result = await docClient.send(new GetCommand({
-            TableName: TABLE_NAME,
-            Key: {
-              pk: `${tableConfig.name}#${itemId}`,
-              sk: 'ITEM'
-            }
-          }));
+      const requiredFields = getRequiredFields(tableIndex);
+      let imported = 0;
+      let failed = 0;
+      const errors: string[] = [];
 
-          if (!result.Item) {
-            return createResponse(404, { error: 'Item not found' });
+      for (let i = 0; i < items.length; i += 25) {
+        const batch = items.slice(i, i + 25);
+        const writeRequests = [];
+
+        for (const item of batch) {
+          const validationErrors = validateRequired(item, requiredFields);
+          if (validationErrors.length > 0) {
+            failed++;
+            errors.push(`Item ${i + batch.indexOf(item)}: ${validationErrors.join(', ')}`);
+            continue;
           }
 
-          return createResponse(200, result.Item);
-        } catch (error) {
-          console.error('Get error:', error);
-          return createResponse(500, { error: 'Internal server error' });
+          const now = new Date().toISOString();
+          const processedItem = {
+            ...item,
+            pk,
+            sk: item[tableConfig.pk] || randomUUID(),
+            [tableConfig.pk]: item[tableConfig.pk] || randomUUID(),
+            createdAt: now,
+            updatedAt: now,
+            createdBy: user.id,
+            updatedBy: user.id
+          };
+
+          writeRequests.push({
+            PutRequest: {
+              Item: processedItem
+            }
+          });
+        }
+
+        if (writeRequests.length > 0) {
+          try {
+            await docClient.send(new BatchWriteCommand({
+              RequestItems: {
+                [TABLE_NAME]: writeRequests
+              }
+            }));
+            imported += writeRequests.length;
+          } catch (error) {
+            failed += writeRequests.length;
+            errors.push(`Batch write failed: ${error}`);
+          }
         }
       }
 
-      if (method === 'POST' && !itemId && !isBulkOperation) {
+      await createAuditLog(user, 'BULK_IMPORT', tableConfig.name, {
+        tableIndex,
+        imported,
+        failed,
+        totalItems: items.length
+      });
+
+      return createResponse(200, { imported, failed, errors });
+    }
+
+    switch (method) {
+      case 'GET':
+        if (!hasPermission(user, tableConfig.name, 'read')) {
+          return createResponse(403, { error: 'Forbidden' });
+        }
+
+        if (resourceId) {
+          const result = await docClient.send(new GetCommand({
+            TableName: TABLE_NAME,
+            Key: { pk, sk: resourceId }
+          }));
+          
+          if (!result.Item) {
+            return createResponse(404, { error: 'Resource not found' });
+          }
+          
+          return createResponse(200, result.Item);
+        } else {
+          const limit = parseInt(event.queryStringParameters?.limit || '50');
+          const result = await docClient.send(new ScanCommand({
+            TableName: TABLE_NAME,
+            FilterExpression: 'pk = :pk',
+            ExpressionAttributeValues: { ':pk': pk },
+            Limit: limit
+          }));
+          
+          return createResponse(200, {
+            items: result.Items || [],
+            count: result.Count || 0
+          });
+        }
+
+      case 'POST':
         if (!hasPermission(user, tableConfig.name, 'create')) {
           return createResponse(403, { error: 'Forbidden' });
         }
 
-        let requestBody;
-        try {
-          requestBody = JSON.parse(event.body || '{}');
-        } catch {
-          return createResponse(400, { error: 'Invalid JSON' });
+        const createBody = JSON.parse(event.body || '{}');
+        const createValidationErrors = validateRequired(createBody, getRequiredFields(tableIndex));
+        
+        if (createValidationErrors.length > 0) {
+          return createResponse(400, { error: 'Validation failed', details: createValidationErrors });
         }
 
-        const requiredFields = getRequiredFields(tableIndex);
-        const validationErrors = validateRequired(requestBody, requiredFields);
-        if (validationErrors.length > 0) {
-          return createResponse(400, { error: 'Validation failed', details: validationErrors });
-        }
-
-        const id = requestBody[tableConfig.pk] || randomUUID();
+        const newId = randomUUID();
         const now = new Date().toISOString();
-        const item = {
-          ...requestBody,
-          [tableConfig.pk]: id,
-          pk: `${tableConfig.name}#${id}`,
-          sk: 'ITEM',
+        const newItem = {
+          ...createBody,
+          pk,
+          sk: newId,
+          [tableConfig.pk]: newId,
           createdAt: now,
           updatedAt: now,
           createdBy: user.id,
           updatedBy: user.id
         };
 
-        try {
-          await docClient.send(new PutCommand({
-            TableName: TABLE_NAME,
-            Item: item
-          }));
+        await docClient.send(new PutCommand({
+          TableName: TABLE_NAME,
+          Item: newItem
+        }));
 
-          await writeAuditLog(user, 'CREATE', tableConfig.name, { id });
+        await createAuditLog(user, 'CREATE', tableConfig.name, { id: newId });
+        return createResponse(201, newItem);
 
-          return createResponse(201, item);
-        } catch (error) {
-          console.error('Put error:', error);
-          return createResponse(500, { error: 'Internal server error' });
+      case 'PUT':
+        if (!resourceId) {
+          return createResponse(400, { error: 'Resource ID required' });
         }
-      }
-
-      if (method === 'POST' && isBulkOperation) {
-        if (!hasPermission(user, tableConfig.name, 'bulk')) {
-          return createResponse(403, { error: 'Forbidden' });
-        }
-
-        let requestBody;
-        try {
-          requestBody = JSON.parse(event.body || '{}');
-        } catch {
-          return createResponse(400, { error: 'Invalid JSON' });
-        }
-
-        if (!Array.isArray(requestBody.items)) {
-          return createResponse(400, { error: 'items must be an array' });
-        }
-
-        const items = requestBody.items;
-        const requiredFields = getRequiredFields(tableIndex);
-        let imported = 0;
-        let failed = 0;
-        const errors: string[] = [];
-
-        for (let i = 0; i < items.length; i += 25) {
-          const batch = items.slice(i, i + 25);
-          const writeRequests = [];
-
-          for (const item of batch) {
-            const validationErrors = validateRequired(item, requiredFields);
-            if (validationErrors.length > 0) {
-              failed++;
-              errors.push(`Item ${i + batch.indexOf(item)}: ${validationErrors.join(', ')}`);
-              continue;
-            }
-
-            const id = item[tableConfig.pk] || randomUUID();
-            const now = new Date().toISOString();
-            const processedItem = {
-              ...item,
-              [tableConfig.pk]: id,
-              pk: `${tableConfig.name}#${id}`,
-              sk: 'ITEM',
-              createdAt: now,
-              updatedAt: now,
-              createdBy: user.id,
-              updatedBy: user.id
-            };
-
-            writeRequests.push({
-              PutRequest: {
-                Item: processedItem
-              }
-            });
-          }
-
-          if (writeRequests.length > 0) {
-            try {
-              await docClient.send(new BatchWriteCommand({
-                RequestItems: {
-                  [TABLE_NAME]: writeRequests
-                }
-              }));
-              imported += writeRequests.length;
-            } catch (error) {
-              console.error('Batch write error:', error);
-              failed += writeRequests.length;
-              errors.push(`Batch ${Math.floor(i / 25)}: Database error`);
-            }
-          }
-        }
-
-        await writeAuditLog(user, 'BULK_CREATE', tableConfig.name, { imported, failed });
-
-        return createResponse(200, { imported, failed, errors });
-      }
-
-      if (method === 'PUT' && itemId) {
+        
         if (!hasPermission(user, tableConfig.name, 'update')) {
           return createResponse(403, { error: 'Forbidden' });
         }
 
-        let requestBody;
-        try {
-          requestBody = JSON.parse(event.body || '{}');
-        } catch {
-          return createResponse(400, { error: 'Invalid JSON' });
+        const updateBody = JSON.parse(event.body || '{}');
+        const updateValidationErrors = validateRequired(updateBody, getRequiredFields(tableIndex));
+        
+        if (updateValidationErrors.length > 0) {
+          return createResponse(400, { error: 'Validation failed', details: updateValidationErrors });
         }
 
-        const requiredFields = getRequiredFields(tableIndex);
-        const validationErrors = validateRequired(requestBody, requiredFields);
-        if (validationErrors.length > 0) {
-          return createResponse(400, { error: 'Validation failed', details: validationErrors });
+        const existingItem = await docClient.send(new GetCommand({
+          TableName: TABLE_NAME,
+          Key: { pk, sk: resourceId }
+        }));
+        
+        if (!existingItem.Item) {
+          return createResponse(404, { error: 'Resource not found' });
         }
 
-        try {
-          const existing = await docClient.send(new GetCommand({
-            TableName: TABLE_NAME,
-            Key: {
-              pk: `${tableConfig.name}#${itemId}`,
-              sk: 'ITEM'
-            }
-          }));
+        const updatedItem = {
+          ...existingItem.Item,
+          ...updateBody,
+          updatedAt: new Date().toISOString(),
+          updatedBy: user.id
+        };
 
-          if (!existing.Item) {
-            return createResponse(404, { error: 'Item not found' });
-          }
+        await docClient.send(new PutCommand({
+          TableName: TABLE_NAME,
+          Item: updatedItem
+        }));
 
-          const updatedItem = {
-            ...existing.Item,
-            ...requestBody,
-            [tableConfig.pk]: itemId,
-            updatedAt: new Date().toISOString(),
-            updatedBy: user.id
-          };
+        await createAuditLog(user, 'UPDATE', tableConfig.name, { id: resourceId });
+        return createResponse(200, updatedItem);
 
-          await docClient.send(new PutCommand({
-            TableName: TABLE_NAME,
-            Item: updatedItem
-          }));
-
-          await writeAuditLog(user, 'UPDATE', tableConfig.name, { id: itemId });
-
-          return createResponse(200, updatedItem);
-        } catch (error) {
-          console.error('Update error:', error);
-          return createResponse(500, { error: 'Internal server error' });
+      case 'DELETE':
+        if (!resourceId) {
+          return createResponse(400, { error: 'Resource ID required' });
         }
-      }
-
-      if (method === 'DELETE' && itemId) {
+        
         if (!hasPermission(user, tableConfig.name, 'delete')) {
           return createResponse(403, { error: 'Forbidden' });
         }
 
-        try {
-          const existing = await docClient.send(new GetCommand({
-            TableName: TABLE_NAME,
-            Key: {
-              pk: `${tableConfig.name}#${itemId}`,
-              sk: 'ITEM'
-            }
-          }));
-
-          if (!existing.Item) {
-            return createResponse(404, { error: 'Item not found' });
-          }
-
-          await docClient.send(new DeleteCommand({
-            TableName: TABLE_NAME,
-            Key: {
-              pk: `${tableConfig.name}#${itemId}`,
-              sk: 'ITEM'
-            }
-          }));
-
-          await writeAuditLog(user, 'DELETE', tableConfig.name, { id: itemId });
-
-          return createResponse(200, { message: 'Item deleted successfully' });
-        } catch (error) {
-          console.error('Delete error:', error);
-          return createResponse(500, { error: 'Internal server error' });
+        const deleteItem = await docClient.send(new GetCommand({
+          TableName: TABLE_NAME,
+          Key: { pk, sk: resourceId }
+        }));
+        
+        if (!deleteItem.Item) {
+          return createResponse(404, { error: 'Resource not found' });
         }
-      }
-    }
 
-    return createResponse(404, { error: 'Not found' });
+        await docClient.send(new DeleteCommand({
+          TableName: TABLE_NAME,
+          Key: { pk, sk: resourceId }
+        }));
+
+        await createAuditLog(user, 'DELETE', tableConfig.name, { id: resourceId });
+        return createResponse(200, { message: 'Resource deleted successfully' });
+
+      default:
+        return createResponse(405, { error: 'Method not allowed' });
+    }
   } catch (error) {
     console.error('Handler error:', error);
     return createResponse(500, { error: 'Internal server error' });
