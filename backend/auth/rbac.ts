@@ -2,7 +2,7 @@ export interface User {
   id: string;
   role: 'admin' | 'operator' | 'viewer';
   organizationId?: string;
-  accessibleStoreIds?: string[];
+  accessibleStores?: string[];
 }
 
 export interface Permission {
@@ -49,7 +49,7 @@ export function extractUserFromEvent(event: any): User {
       id: payload.sub || 'anonymous',
       role: payload.role || 'viewer',
       organizationId: payload.organizationId,
-      accessibleStoreIds: payload.accessibleStoreIds
+      accessibleStores: payload.accessibleStores
     };
   } catch {
     return { id: 'anonymous', role: 'viewer' };
