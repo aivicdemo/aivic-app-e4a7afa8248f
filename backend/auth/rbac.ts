@@ -2,7 +2,7 @@ export interface User {
   id: string;
   role: 'admin' | 'operator' | 'viewer';
   organizationId?: string;
-  accessibleStores?: string[];
+  accessibleStoreIds?: string[];
 }
 
 export interface Permission {
@@ -44,12 +44,12 @@ export function extractUserFromEvent(event: any): User {
   
   try {
     const token = authHeader.replace('Bearer ', '');
-    const payload = JSON.parse(Buffer.from(token.split('.')[1], 'base64').toString());
+    const decoded = JSON.parse(Buffer.from(token.split('.')[1], 'base64').toString());
     return {
-      id: payload.sub || 'anonymous',
-      role: payload.role || 'viewer',
-      organizationId: payload.organizationId,
-      accessibleStores: payload.accessibleStores
+      id: decoded.sub || 'anonymous',
+      role: decoded.role || 'viewer',
+      organizationId: decoded.organizationId,
+      accessibleStoreIds: decoded.accessibleStoreIds
     };
   } catch {
     return { id: 'anonymous', role: 'viewer' };
