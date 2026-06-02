@@ -2,7 +2,7 @@ export interface User {
   id: string;
   role: 'admin' | 'operator' | 'viewer';
   organizationId?: string;
-  accessibleStoreIds?: string[];
+  accessibleStores?: string[];
 }
 
 export interface Permission {
@@ -39,7 +39,7 @@ export function hasPermission(user: User, resource: string, action: string): boo
 export function extractUserFromEvent(event: any): User {
   const authHeader = event.headers?.Authorization || event.headers?.authorization;
   if (!authHeader) {
-    throw new Error('Authorization header missing');
+    throw new Error('No authorization header');
   }
   
   try {
@@ -49,7 +49,7 @@ export function extractUserFromEvent(event: any): User {
       id: payload.sub || payload.userId,
       role: payload.role || 'viewer',
       organizationId: payload.organizationId,
-      accessibleStoreIds: payload.accessibleStoreIds
+      accessibleStores: payload.accessibleStores
     };
   } catch (error) {
     throw new Error('Invalid token');
