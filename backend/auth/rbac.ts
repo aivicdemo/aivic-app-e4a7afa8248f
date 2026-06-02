@@ -1,6 +1,8 @@
+export type Role = 'admin' | 'operator' | 'viewer';
+
 export interface User {
   id: string;
-  role: 'admin' | 'operator' | 'viewer';
+  role: Role;
   organizationId?: string;
   accessibleStoreIds?: string[];
 }
@@ -10,7 +12,7 @@ export interface Permission {
   action: 'create' | 'read' | 'update' | 'delete' | 'bulk';
 }
 
-const ROLE_PERMISSIONS: Record<string, Permission[]> = {
+const ROLE_PERMISSIONS: Record<Role, Permission[]> = {
   admin: [
     { resource: '*', action: 'create' },
     { resource: '*', action: 'read' },
@@ -29,8 +31,8 @@ const ROLE_PERMISSIONS: Record<string, Permission[]> = {
   ]
 };
 
-export function hasPermission(user: User, resource: string, action: string): boolean {
-  const permissions = ROLE_PERMISSIONS[user.role] || [];
+export function hasPermission(user: User, resource: string, action: Permission['action']): boolean {
+  const permissions = ROLE_PERMISSIONS[user.role];
   return permissions.some(p => 
     (p.resource === '*' || p.resource === resource) && p.action === action
   );
@@ -39,17 +41,17 @@ export function hasPermission(user: User, resource: string, action: string): boo
 export function extractUserFromEvent(event: any): User {
   const authHeader = event.headers?.Authorization || event.headers?.authorization;
   if (!authHeader) {
-    throw new Error('No authorization header');
+    throw new Error('Missing authorization header');
   }
   
   try {
     const token = authHeader.replace('Bearer ', '');
-    const decoded = JSON.parse(Buffer.from(token.split('.')[1], 'base64').toString());
+    const payload = JSON.parse(Buffer.from(token.split('.')[1], 'base64').toString());
     return {
-      id: decoded.sub || 'anonymous',
-      role: decoded.role || 'viewer',
-      organizationId: decoded.organizationId,
-      accessibleStoreIds: decoded.accessibleStoreIds
+      id: payload.sub || payload.userId,
+      role: payload.role || 'viewer',
+      organizationId: payload.organizationId,
+      accessibleStoreIds: payload.accessibleStoreIds
     };
   } catch {
     return { id: 'anonymous', role: 'viewer' };
