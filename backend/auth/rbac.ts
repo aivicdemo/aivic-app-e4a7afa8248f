@@ -52,6 +52,6 @@ export function extractUserFromEvent(event: any): User {
       accessibleStoreIds: payload.accessibleStoreIds
     };
   } catch (error) {
-    throw new Error('Invalid token format');
+    throw new Error('Invalid token');
   }
 }
