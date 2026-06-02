@@ -2,7 +2,7 @@ export interface User {
   id: string;
   role: 'admin' | 'operator' | 'viewer';
   organizationId?: string;
-  accessibleStoreRange?: string;
+  accessibleStores?: string[];
 }
 
 export interface Permission {
@@ -46,10 +46,10 @@ export function extractUserFromEvent(event: any): User {
     const token = authHeader.replace('Bearer ', '');
     const payload = JSON.parse(Buffer.from(token.split('.')[1], 'base64').toString());
     return {
-      id: payload.sub || payload.userId,
+      id: payload.sub || 'unknown',
       role: payload.role || 'viewer',
       organizationId: payload.organizationId,
-      accessibleStoreRange: payload.accessibleStoreRange
+      accessibleStores: payload.accessibleStores
     };
   } catch (error) {
     throw new Error('Invalid token');
