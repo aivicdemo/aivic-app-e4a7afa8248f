@@ -2,7 +2,7 @@ export interface User {
   id: string;
   role: 'admin' | 'operator' | 'viewer';
   organizationId?: string;
-  accessibleStoreRange?: string;
+  accessibleStores?: string[];
 }
 
 export interface Permission {
@@ -39,17 +39,17 @@ export function hasPermission(user: User, resource: string, action: string): boo
 export function extractUserFromEvent(event: any): User {
   const authHeader = event.headers?.Authorization || event.headers?.authorization;
   if (!authHeader) {
-    throw new Error('Unauthorized');
+    throw new Error('No authorization header');
   }
   
   try {
     const token = authHeader.replace('Bearer ', '');
-    const decoded = JSON.parse(Buffer.from(token.split('.')[1], 'base64').toString());
+    const payload = JSON.parse(Buffer.from(token.split('.')[1], 'base64').toString());
     return {
-      id: decoded.sub || 'unknown',
-      role: decoded.role || 'viewer',
-      organizationId: decoded.organizationId,
-      accessibleStoreRange: decoded.accessibleStoreRange
+      id: payload.sub || payload.userId,
+      role: payload.role || 'viewer',
+      organizationId: payload.organizationId,
+      accessibleStores: payload.accessibleStores
     };
   } catch (error) {
     throw new Error('Invalid token');
