@@ -8,17 +8,17 @@ const docClient = DynamoDBDocumentClient.from(client);
 const TABLE_NAME = process.env.MAIN_TABLE!;
 
 const TABLE_CONFIGS = {
-  '0': { name: 'stores', pk: 'storeId', sortKey: null },
-  '1': { name: 'keep_bottles', pk: 'keepBottleId', sortKey: null },
-  '2': { name: 'visit_history', pk: 'visitHistoryId', sortKey: null },
-  '3': { name: 'consumption_history', pk: 'consumptionHistoryId', sortKey: null },
-  '4': { name: 'demand_forecast', pk: 'forecastReportId', sortKey: null },
-  '5': { name: 'monthly_summary', pk: 'summaryId', sortKey: null },
-  '6': { name: 'seasonal_analysis', pk: 'seasonalAnalysisId', sortKey: null },
-  '7': { name: 'replenishment_plan', pk: 'replenishmentPlanId', sortKey: null },
-  '8': { name: 'delivery_schedule', pk: 'deliveryScheduleId', sortKey: null },
-  '9': { name: 'delivery_route', pk: 'deliveryRouteId', sortKey: null },
-  '10': { name: 'system_users', pk: 'userId', sortKey: null }
+  '0': { name: 'stores', pk: 'storeId', entityType: 'STORE' },
+  '1': { name: 'keep_bottles', pk: 'keepBottleId', entityType: 'KEEP_BOTTLE' },
+  '2': { name: 'visit_history', pk: 'visitHistoryId', entityType: 'VISIT_HISTORY' },
+  '3': { name: 'consumption_history', pk: 'consumptionHistoryId', entityType: 'CONSUMPTION_HISTORY' },
+  '4': { name: 'demand_forecast', pk: 'forecastReportId', entityType: 'DEMAND_FORECAST' },
+  '5': { name: 'monthly_summary', pk: 'summaryId', entityType: 'MONTHLY_SUMMARY' },
+  '6': { name: 'seasonal_analysis', pk: 'seasonalAnalysisId', entityType: 'SEASONAL_ANALYSIS' },
+  '7': { name: 'replenishment_plan', pk: 'replenishmentPlanId', entityType: 'REPLENISHMENT_PLAN' },
+  '8': { name: 'delivery_schedule', pk: 'deliveryScheduleId', entityType: 'DELIVERY_SCHEDULE' },
+  '9': { name: 'delivery_route', pk: 'deliveryRouteId', entityType: 'DELIVERY_ROUTE' },
+  '10': { name: 'system_users', pk: 'userId', entityType: 'SYSTEM_USER' }
 };
 
 interface APIResponse {
@@ -45,6 +45,7 @@ async function createAuditLog(user: User, action: string, resource: string, deta
     pk: 'AUDIT',
     sk: `${Date.now()}_${randomUUID()}`,
     userId: user.id,
+    userRole: user.role,
     action,
     resource,
     details,
@@ -67,22 +68,17 @@ function validateRequired(item: any, requiredFields: string[]): string[] {
   return errors;
 }
 
-function addTimestamps(item: any, isUpdate = false) {
-  const now = new Date().toISOString();
-  if (!isUpdate) {
-    item.createdAt = now;
+function getTableConfig(tableIndex: string) {
+  const config = TABLE_CONFIGS[tableIndex as keyof typeof TABLE_CONFIGS];
+  if (!config) {
+    throw new Error(`Invalid table index: ${tableIndex}`);
   }
-  item.updatedAt = now;
-  return item;
+  return config;
 }
 
 export const handler = async (event: any): Promise<APIResponse> => {
   try {
-    const method = event.httpMethod;
-    const path = event.path;
-    const pathParams = event.pathParameters || {};
-    
-    if (method === 'OPTIONS') {
+    if (event.httpMethod === 'OPTIONS') {
       return createResponse(200, {});
     }
 
@@ -93,8 +89,11 @@ export const handler = async (event: any): Promise<APIResponse> => {
       return createResponse(401, { error: 'Unauthorized' });
     }
 
-    // GET /resources - リソース一覧取得
-    if (method === 'GET' && path === '/resources') {
+    const path = event.path || event.rawPath || '';
+    const method = event.httpMethod || event.requestContext?.http?.method || '';
+    const pathParams = event.pathParameters || {};
+    
+    if (path === '/resources' && method === 'GET') {
       if (!hasPermission(user, 'resources', 'read')) {
         return createResponse(403, { error: 'Forbidden' });
       }
@@ -102,30 +101,22 @@ export const handler = async (event: any): Promise<APIResponse> => {
       const resources = Object.entries(TABLE_CONFIGS).map(([index, config]) => ({
         index,
         name: config.name,
-        primaryKey: config.pk
+        entityType: config.entityType
       }));
       
       return createResponse(200, { resources });
     }
 
-    // テーブル操作のルーティング
-    const tableMatch = path.match(/^\/api\/(\d+)(?:\/(\w+))?(?:\/(\w+))?$/);
-    if (!tableMatch) {
+    const tableIndexMatch = path.match(/^\/api\/(\d+)/);
+    if (!tableIndexMatch) {
       return createResponse(404, { error: 'Not found' });
     }
 
-    const [, tableIndex, operation, itemId] = tableMatch;
-    const tableConfig = TABLE_CONFIGS[tableIndex as keyof typeof TABLE_CONFIGS];
+    const tableIndex = tableIndexMatch[1];
+    const config = getTableConfig(tableIndex);
     
-    if (!tableConfig) {
-      return createResponse(404, { error: 'Table not found' });
-    }
-
-    const resource = tableConfig.name;
-
-    // 一括インポート
-    if (method === 'POST' && operation === 'bulk') {
-      if (!hasPermission(user, resource, 'bulk')) {
+    if (path.includes('/bulk') && method === 'POST') {
+      if (!hasPermission(user, config.name, 'bulk')) {
         return createResponse(403, { error: 'Forbidden' });
       }
 
@@ -139,24 +130,28 @@ export const handler = async (event: any): Promise<APIResponse> => {
       let imported = 0;
       let failed = 0;
       const errors: string[] = [];
-
-      // 25件ずつに分割してバッチ処理
+      
+      const chunks = [];
       for (let i = 0; i < items.length; i += 25) {
-        const batch = items.slice(i, i + 25);
-        const writeRequests = batch.map(item => {
-          const processedItem = {
+        chunks.push(items.slice(i, i + 25));
+      }
+
+      for (const chunk of chunks) {
+        const writeRequests = chunk.map(item => {
+          const now = new Date().toISOString();
+          const enrichedItem = {
             ...item,
-            [tableConfig.pk]: item[tableConfig.pk] || randomUUID(),
-            ...addTimestamps({})
+            [config.pk]: item[config.pk] || randomUUID(),
+            entityType: config.entityType,
+            createdAt: now,
+            updatedAt: now,
+            createdBy: user.id,
+            updatedBy: user.id
           };
           
           return {
             PutRequest: {
-              Item: {
-                pk: processedItem[tableConfig.pk],
-                sk: tableConfig.sortKey ? processedItem[tableConfig.sortKey] : 'ITEM',
-                ...processedItem
-              }
+              Item: enrichedItem
             }
           };
         });
@@ -167,46 +162,44 @@ export const handler = async (event: any): Promise<APIResponse> => {
               [TABLE_NAME]: writeRequests
             }
           }));
-          imported += batch.length;
+          imported += chunk.length;
         } catch (error) {
-          failed += batch.length;
-          errors.push(`Batch ${Math.floor(i/25) + 1}: ${error}`);
+          failed += chunk.length;
+          errors.push(`Batch write failed: ${error}`);
         }
       }
 
-      await createAuditLog(user, 'BULK_IMPORT', resource, { imported, failed, total: items.length });
+      await createAuditLog(user, 'BULK_IMPORT', config.name, { imported, failed, totalItems: items.length });
       
       return createResponse(200, { imported, failed, errors });
     }
 
-    // 一覧取得
-    if (method === 'GET' && !operation) {
-      if (!hasPermission(user, resource, 'read')) {
+    if (method === 'GET' && !pathParams.id) {
+      if (!hasPermission(user, config.name, 'read')) {
         return createResponse(403, { error: 'Forbidden' });
       }
 
       const result = await docClient.send(new ScanCommand({
         TableName: TABLE_NAME,
-        FilterExpression: 'begins_with(pk, :prefix)',
+        FilterExpression: 'entityType = :entityType',
         ExpressionAttributeValues: {
-          ':prefix': tableConfig.name
+          ':entityType': config.entityType
         }
       }));
 
       return createResponse(200, { items: result.Items || [] });
     }
 
-    // 詳細取得
-    if (method === 'GET' && operation && !itemId) {
-      if (!hasPermission(user, resource, 'read')) {
+    if (method === 'GET' && pathParams.id) {
+      if (!hasPermission(user, config.name, 'read')) {
         return createResponse(403, { error: 'Forbidden' });
       }
 
       const result = await docClient.send(new GetCommand({
         TableName: TABLE_NAME,
         Key: {
-          pk: operation,
-          sk: 'ITEM'
+          [config.pk]: pathParams.id,
+          entityType: config.entityType
         }
       }));
 
@@ -214,24 +207,31 @@ export const handler = async (event: any): Promise<APIResponse> => {
         return createResponse(404, { error: 'Item not found' });
       }
 
-      return createResponse(200, { item: result.Item });
+      return createResponse(200, result.Item);
     }
 
-    // 作成
-    if (method === 'POST' && !operation) {
-      if (!hasPermission(user, resource, 'create')) {
+    if (method === 'POST') {
+      if (!hasPermission(user, config.name, 'create')) {
         return createResponse(403, { error: 'Forbidden' });
       }
 
       const body = JSON.parse(event.body || '{}');
-      const id = body[tableConfig.pk] || randomUUID();
+      const requiredFields = getRequiredFields(config.entityType);
+      const validationErrors = validateRequired(body, requiredFields);
       
+      if (validationErrors.length > 0) {
+        return createResponse(400, { errors: validationErrors });
+      }
+
+      const now = new Date().toISOString();
       const item = {
-        pk: id,
-        sk: 'ITEM',
-        [tableConfig.pk]: id,
         ...body,
-        ...addTimestamps({})
+        [config.pk]: body[config.pk] || randomUUID(),
+        entityType: config.entityType,
+        createdAt: now,
+        updatedAt: now,
+        createdBy: user.id,
+        updatedBy: user.id
       };
 
       await docClient.send(new PutCommand({
@@ -239,64 +239,51 @@ export const handler = async (event: any): Promise<APIResponse> => {
         Item: item
       }));
 
-      await createAuditLog(user, 'CREATE', resource, { id });
+      await createAuditLog(user, 'CREATE', config.name, { id: item[config.pk] });
       
-      return createResponse(201, { item });
+      return createResponse(201, item);
     }
 
-    // 更新
-    if (method === 'PUT' && operation) {
-      if (!hasPermission(user, resource, 'update')) {
+    if (method === 'PUT' && pathParams.id) {
+      if (!hasPermission(user, config.name, 'update')) {
         return createResponse(403, { error: 'Forbidden' });
       }
 
       const body = JSON.parse(event.body || '{}');
+      const now = new Date().toISOString();
       
-      // 既存アイテムの確認
-      const existing = await docClient.send(new GetCommand({
-        TableName: TABLE_NAME,
-        Key: {
-          pk: operation,
-          sk: 'ITEM'
-        }
-      }));
-
-      if (!existing.Item) {
-        return createResponse(404, { error: 'Item not found' });
-      }
-
-      const updatedItem = {
-        ...existing.Item,
+      const item = {
         ...body,
-        [tableConfig.pk]: operation,
-        ...addTimestamps({}, true)
+        [config.pk]: pathParams.id,
+        entityType: config.entityType,
+        updatedAt: now,
+        updatedBy: user.id
       };
 
       await docClient.send(new PutCommand({
         TableName: TABLE_NAME,
-        Item: updatedItem
+        Item: item
       }));
 
-      await createAuditLog(user, 'UPDATE', resource, { id: operation });
+      await createAuditLog(user, 'UPDATE', config.name, { id: pathParams.id });
       
-      return createResponse(200, { item: updatedItem });
+      return createResponse(200, item);
     }
 
-    // 削除
-    if (method === 'DELETE' && operation) {
-      if (!hasPermission(user, resource, 'delete')) {
+    if (method === 'DELETE' && pathParams.id) {
+      if (!hasPermission(user, config.name, 'delete')) {
         return createResponse(403, { error: 'Forbidden' });
       }
 
       await docClient.send(new DeleteCommand({
         TableName: TABLE_NAME,
         Key: {
-          pk: operation,
-          sk: 'ITEM'
+          [config.pk]: pathParams.id,
+          entityType: config.entityType
         }
       }));
 
-      await createAuditLog(user, 'DELETE', resource, { id: operation });
+      await createAuditLog(user, 'DELETE', config.name, { id: pathParams.id });
       
       return createResponse(200, { message: 'Item deleted successfully' });
     }
@@ -308,3 +295,21 @@ export const handler = async (event: any): Promise<APIResponse> => {
     return createResponse(500, { error: 'Internal server error' });
   }
 };
+
+function getRequiredFields(entityType: string): string[] {
+  const fieldMap: Record<string, string[]> = {
+    'STORE': ['storeCode', 'storeName', 'storeCategory', 'prefecture', 'city', 'transactionStartDate', 'transactionStatus', 'activeFlag'],
+    'KEEP_BOTTLE': ['storeId', 'customerName', 'productName', 'category', 'capacityMl', 'remainingMl', 'remainingPercent', 'keepStartDate', 'status'],
+    'VISIT_HISTORY': ['memberId', 'storeId', 'visitDateTime', 'keepBottleUsedFlag', 'newBottleOrderFlag'],
+    'CONSUMPTION_HISTORY': ['storeId', 'keepBottleId', 'memberId', 'consumptionDateTime', 'consumptionAmount', 'remainingAmount', 'completedFlag'],
+    'DEMAND_FORECAST': ['storeId', 'productCategory', 'forecastPeriodStart', 'forecastPeriodEnd', 'forecastDemand', 'confidenceLevel', 'seasonalFlag', 'eventFlag', 'recommendedPurchaseAmount'],
+    'MONTHLY_SUMMARY': ['storeId', 'summaryMonth', 'productCategory', 'newKeepBottles', 'completedBottles', 'totalConsumption', 'visitCount', 'activeMemberCount', 'averageConsumption'],
+    'SEASONAL_ANALYSIS': ['analysisYear', 'analysisMonth', 'alcoholCategory', 'regionCode', 'baseConsumption', 'actualConsumption', 'seasonalIndex', 'eventInfluenceFlag', 'temperatureInfluence'],
+    'REPLENISHMENT_PLAN': ['storeId', 'productCode', 'productName', 'planPeriodStart', 'planPeriodEnd', 'currentStock', 'forecastDemand', 'safetyStock', 'plannedReplenishment', 'scheduledDate', 'planStatus', 'priority'],
+    'DELIVERY_SCHEDULE': ['storeId', 'productCode', 'productName', 'scheduledDeliveryDate', 'scheduledQuantity', 'deliveryStatus'],
+    'DELIVERY_ROUTE': ['routeName', 'driverId', 'vehicleId', 'startLocation', 'endLocation', 'estimatedDuration', 'totalDistance', 'maxCapacity', 'deliveryDays', 'startTime', 'activeFlag'],
+    'SYSTEM_USER': ['loginId', 'passwordHash', 'userName', 'email', 'permissionLevel', 'organization', 'accountStatus']
+  };
+  
+  return fieldMap[entityType] || [];
+}
