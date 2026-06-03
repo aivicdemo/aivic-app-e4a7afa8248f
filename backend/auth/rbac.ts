@@ -51,7 +51,7 @@ export function extractUserFromEvent(event: any): User {
       organizationId: decoded.organizationId,
       accessibleStoreIds: decoded.accessibleStoreIds
     };
-  } catch {
-    return { id: 'anonymous', role: 'viewer' };
+  } catch (error) {
+    throw new Error('Invalid token');
   }
 }
