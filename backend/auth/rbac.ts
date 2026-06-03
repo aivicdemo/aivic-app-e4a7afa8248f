@@ -1,6 +1,8 @@
+export type Role = 'admin' | 'operator' | 'viewer';
+
 export interface User {
   id: string;
-  role: 'admin' | 'operator' | 'viewer';
+  role: Role;
   organizationId?: string;
   accessibleStoreIds?: string[];
 }
@@ -10,7 +12,7 @@ export interface Permission {
   action: 'create' | 'read' | 'update' | 'delete' | 'bulk';
 }
 
-const ROLE_PERMISSIONS: Record<string, Permission[]> = {
+const ROLE_PERMISSIONS: Record<Role, Permission[]> = {
   admin: [
     { resource: '*', action: 'create' },
     { resource: '*', action: 'read' },
@@ -29,8 +31,8 @@ const ROLE_PERMISSIONS: Record<string, Permission[]> = {
   ]
 };
 
-export function hasPermission(user: User, resource: string, action: string): boolean {
-  const permissions = ROLE_PERMISSIONS[user.role] || [];
+export function hasPermission(user: User, resource: string, action: Permission['action']): boolean {
+  const permissions = ROLE_PERMISSIONS[user.role];
   return permissions.some(p => 
     (p.resource === '*' || p.resource === resource) && p.action === action
   );
